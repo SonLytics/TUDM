@@ -20,11 +20,12 @@ class StatLogParser:
         "mtime", "ctime", "atime", "btime"
     ]
 
-    def __init__(self, bodyfile_path, hostname, uac_log_path, output_dir):
+    def __init__(self, bodyfile_path, hostname, uac_log_path, output_dir, tracker_queue):
         self.bodyfile_path = Path(bodyfile_path)
         self.hostname = hostname
         self.uac_log_path = uac_log_path
         self.output_path = Path(output_dir) / f"output_{hostname}.jsonl"
+        self.tracker_queue = tracker_queue
 
     @staticmethod
     def to_iso(ts):
@@ -34,7 +35,7 @@ class StatLogParser:
         except:
             return None
 
-    def process(self, tracker_queue):
+    def process(self):
         try:
             results = []
             total_lines = 0
@@ -78,14 +79,17 @@ class StatLogParser:
                                 },
                                 "metadata": {
                                     "event_type": "FILE_READ",
-                                    "product_name": "Linux"
+                                    "product_name": "Linux",
+                                    "vendor_name": "Juniper",
+                                    "log_type": "Host"
                                 },
                                 "principal": {
                                     "process": {
                                         "command_line": "stat"
                                     },
                                     "host_name": self.hostname
-                                }
+                                },
+                                "intermediary": {"namespace": "UnixArtifactCollector"}
                             }
                             if symlink_path:
                                 base_event["additional"] = {"symlink": symlink_path}
@@ -98,13 +102,31 @@ class StatLogParser:
 
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             with self.output_path.open("w", encoding="utf-8") as outfile:
-                for item in results:
-                    outfile.write(json.dumps(item) + "\n")
+                outfile.write('[\n')
+                for idx, item in enumerate(results):
+                    json.dump(item, outfile)
+                    if idx < len(results) - 1:
+                        outfile.write(',\n')
+                outfile.write('\n]')
+
+            # Determine where to append the output file path
+            evidence_dir = self.output_path.parent.parent / 'Evidence'
+            uploader_txt = evidence_dir / 'uploader.txt'
+            target_path = uploader_txt  # default
+            if uploader_txt.exists():
+                with uploader_txt.open('r', encoding='utf-8') as upf:
+                    first_line = upf.readline().strip()
+                    if first_line:
+                        target_path = Path(first_line)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with target_path.open('a', encoding='utf-8') as upf:
+                upf.write(str(self.output_path.resolve()) + '\n')
 
             print(f"[✓] Parsed {success_count} entries for host: {self.hostname}")
             print(f"[✓] Output saved to: {self.output_path}")
             print(f"[•] Stats for host {self.hostname}: Total lines: {total_lines}, Success: {success_count}, Fail: {fail_count}, Success rate: {success_count/total_lines*100 if total_lines else 0:.2f}%")
-            tracker_queue.put({
+            print(f"[DEBUG] Putting record in tracker_queue for host: {self.hostname}")
+            self.tracker_queue.put({
                 "hostname": self.hostname,
                 "uac_log_path": str(self.uac_log_path),
                 "output_file": str(self.output_path),
@@ -128,6 +150,7 @@ def load_tracker(tracker_path):
 
 
 def update_tracker(tracker_path, queue, total):
+    print(f"[DEBUG] Entered update_tracker with tracker_path: {tracker_path}")
     processed = []
     while len(processed) < total:
         record = queue.get()
@@ -150,6 +173,8 @@ def update_tracker(tracker_path, queue, total):
             if k not in fieldnames:
                 fieldnames.append(k)
 
+    print(f"[DEBUG] Processed records to write: {processed}")
+    print(f"[DEBUG] Writing tracker CSV to: {tracker_path}")
     with tracker_path.open("w", newline='', encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -167,7 +192,7 @@ def find_evidence_records(evidence_csv_path):
 
 def worker(args):
     parser = StatLogParser(*args)
-    parser.process(args[-1])
+    parser.process()
 
 
 def main():
@@ -185,6 +210,9 @@ def main():
     already_done = load_tracker(tracker_file)
     to_process = []
 
+    manager = Manager()
+    tracker_queue = manager.Queue()
+
     for record in all_records:
         hostname = record["hostname"]
         uac_log_path = record["uac_log_path"]
@@ -196,21 +224,21 @@ def main():
         if (hostname, uac_log_path) in already_done:
             print(f"[•] Already processed: {hostname}")
             continue
-        to_process.append((bodyfile_path, hostname, uac_log_path, output_dir))
+        to_process.append((bodyfile_path, hostname, uac_log_path, output_dir, tracker_queue))
 
     if not to_process:
         print("[✓] Nothing to process.")
         return
 
-    manager = Manager()
-    queue = manager.Queue()
     total = len(to_process)
 
     with Pool(min(cpu_count(), total)) as pool:
         pool.map(worker, to_process)
 
-    queue.put("DONE")
-    update_tracker(tracker_file, queue, total)
+    tracker_queue.put("DONE")
+    print(f"[DEBUG] Calling update_tracker with tracker_file: {tracker_file}")
+    update_tracker(tracker_file, tracker_queue, total)
+    print(f"[DEBUG] update_tracker finished for tracker_file: {tracker_file}")
 
 
 if __name__ == "__main__":
