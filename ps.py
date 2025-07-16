@@ -6,23 +6,17 @@ from multiprocessing import Pool, Manager, cpu_count
 from pygrok import Grok
 import os
 
-GROK_PATTERNS = [
-    Grok(r'%{NUMBER:inode}\|%{DATA:path}\|%{NUMBER:block_count}\|%{DATA:permissions}\|%{NUMBER:uid}\|%{NUMBER:gid}\|%{NUMBER:size}\|%{NUMBER:mtime}\|%{NUMBER:ctime}\|%{NUMBER:atime}\|%{NUMBER:btime}'),
-    Grok(r'%{NUMBER:inode}\|%{DATA:symlink_path} -> %{DATA:symlink_target}\|%{NUMBER:block_count}\|%{DATA:permissions}\|%{NUMBER:uid}\|%{NUMBER:gid}\|%{NUMBER:size}\|%{NUMBER:mtime}\|%{NUMBER:ctime}\|%{NUMBER:atime}\|%{NUMBER:btime}'),
-    Grok(r'%{NUMBER:inode}\|%{DATA:path}\|%{NUMBER:block_count}\|%{DATA:permissions}\|%{NUMBER:uid}\|%{NUMBER:gid}\|%{NUMBER:size}\|%{NUMBER:mtime}\|%{NUMBER:ctime}\|%{NUMBER:atime}'),
-    Grok(r'%{NUMBER:inode}\|%{DATA:symlink_path} -> %{DATA:symlink_target}\|%{NUMBER:block_count}\|%{DATA:permissions}\|%{NUMBER:uid}\|%{NUMBER:gid}\|%{NUMBER:size}\|%{NUMBER:mtime}\|%{NUMBER:ctime}\|%{NUMBER:atime}')
+# Update GROK pattern for ps output
+PS_GROK_PATTERNS = [
+    Grok(r'%{NUMBER:pid}\s+%{DATA:tty}\s+%{TIME:cpu_time}\s+%{GREEDYDATA:cmd}')
 ]
 
+class PsLogParser:
+    # Placeholder fields for ps output (replace with actual fields)
+    fields = ["user", "pid", "ppid", "cmd"]
 
-class StatLogParser:
-    fields = [
-        "inode", "path", "block_count", "permissions",
-        "uid", "gid", "size",
-        "mtime", "ctime", "atime", "btime"
-    ]
-
-    def __init__(self, bodyfile_path, hostname, uac_log_path, output_path, tracker_queue):
-        self.bodyfile_path = Path(bodyfile_path)
+    def __init__(self, psfile_path, hostname, uac_log_path, output_path, tracker_queue):
+        self.psfile_path = Path(psfile_path)
         self.hostname = hostname
         self.uac_log_path = uac_log_path
         self.output_path = Path(output_path)
@@ -42,62 +36,36 @@ class StatLogParser:
             total_lines = 0
             success_count = 0
             fail_count = 0
-            with self.bodyfile_path.open("r", encoding="utf-8", errors="ignore") as infile:
+            with self.psfile_path.open("r", encoding="utf-8", errors="ignore") as infile:
                 for line in infile:
                     total_lines += 1
                     matched = False
-                    for grok in GROK_PATTERNS:
+                    for grok in PS_GROK_PATTERNS:
                         match = grok.match(line.strip())
                         if match:
-                            # Handle symlink
-                            if "symlink_path" in match and "symlink_target" in match:
-                                path = match["symlink_target"]
-                                symlink_path = match["symlink_path"]
-                            else:
-                                path = match.get("path")
-                                symlink_path = None
-
-                            # Handle missing btime
-                            btime = match.get("btime")
-
+                            # UDM mapping for ps output
                             base_event = {
-                                "target": {
-                                    "file": {
-                                        "full_path": path,
-                                        "permissions": match["permissions"],
-                                        "owner": {
-                                            "user_id": match["uid"],
-                                            "group_id": match["gid"]
-                                        },
-                                        "size": int(match["size"]),
-                                        "inode": match["inode"],
-                                        "block_count": match["block_count"],
-                                        "accessed_time": self.to_iso(match["atime"]),
-                                        "modified_time": self.to_iso(match["mtime"]),
-                                        "metadata_change_time": self.to_iso(match["ctime"]),
-                                        "created_time": self.to_iso(btime) if btime else None
-                                    }
+                                "principal": {
+                                    "process": {
+                                        "pid": match.get("pid"),
+                                        "tty": match.get("tty"),
+                                        "cpu_time": match.get("cpu_time"),
+                                        "command_line": match.get("cmd")
+                                    },
+                                    "host_name": self.hostname
                                 },
                                 "metadata": {
-                                    "event_type": "FILE_READ",
+                                    "event_type": "PROCESS_INFO",
                                     "product_name": "Linux",
                                     "vendor_name": "Juniper",
                                     "log_type": "Host"
                                 },
-                                "principal": {
-                                    "process": {
-                                        "command_line": "stat"
-                                    },
-                                    "host_name": self.hostname
-                                },
                                 "intermediary": {"namespace": "UnixArtifactCollector"}
                             }
-                            if symlink_path:
-                                base_event["additional"] = {"symlink": symlink_path}
                             results.append(base_event)
                             success_count += 1
                             matched = True
-                            break  # Only use the first matching pattern
+                            break
                     if not matched:
                         fail_count += 1
 
@@ -139,6 +107,9 @@ class StatLogParser:
         except Exception as e:
             print(f"[!] Failed to process {self.hostname}: {e}")
 
+def worker(args):
+    parser = PsLogParser(*args)
+    parser.process()
 
 def load_tracker(tracker_path):
     if not tracker_path.exists():
@@ -148,7 +119,6 @@ def load_tracker(tracker_path):
             (row["hostname"], row["uac_log_path"])
             for row in csv.DictReader(f)
         )
-
 
 def update_tracker(tracker_path, queue, total):
     print(f"[DEBUG] Entered update_tracker with tracker_path: {tracker_path}")
@@ -165,10 +135,8 @@ def update_tracker(tracker_path, queue, total):
             reader = csv.DictReader(f)
             rows.extend(reader)
 
-    # Dynamically determine all fieldnames
     extra_fields = ["total_lines", "success_count", "fail_count", "success_rate"]
     fieldnames = ["hostname", "uac_log_path", "output_file"] + extra_fields
-    # If there are more fields in the processed records, add them
     for rec in processed:
         for k in rec:
             if k not in fieldnames:
@@ -185,22 +153,15 @@ def update_tracker(tracker_path, queue, total):
 
     print(f"[✓] Tracker updated: {tracker_path}")
 
-
 def find_evidence_records(evidence_csv_path):
     with evidence_csv_path.open("r", encoding="utf-8") as f:
         return list(csv.DictReader(f))
-
-
-def worker(args):
-    parser = StatLogParser(*args)
-    parser.process()
-
 
 def main():
     base_dir = Path(__file__).resolve().parent
     evidence_dir = base_dir.parent / "Evidence"
     output_dir = base_dir.parent / "output"
-    tracker_file = evidence_dir / "body_file_tracker.csv"
+    tracker_file = evidence_dir / "ps_file_tracker.csv"
     evidence_csv = evidence_dir / "evidence_records.csv"
 
     if not evidence_csv.exists():
@@ -222,19 +183,19 @@ def main():
         if not uac_parent or not uac_parent.exists():
             print(f"[!] uac_log_path parent not found for host: {hostname}")
             continue
-        # Recursively search for all bodyfile.txt files
+        # Recursively search for all ps.txt files
         for root, dirs, files in os.walk(uac_parent):
             for file in files:
-                if file == "bodyfile.txt":
-                    bodyfile_path = Path(root) / file
+                if file == "ps.txt":
+                    psfile_path = Path(root) / file
                     # Generate unique output filename
-                    base_output = output_dir / f"bodyfile_output_{hostname}.json"
+                    base_output = output_dir / f"ps_output_{hostname}.json"
                     output_path = base_output
                     count = 2
                     while output_path.exists():
-                        output_path = output_dir / f"bodyfile_output_{hostname}({count}).json"
+                        output_path = output_dir / f"ps_output_{hostname}({count}).json"
                         count += 1
-                    to_process.append((bodyfile_path, hostname, uac_log_path, output_path, tracker_queue))
+                    to_process.append((psfile_path, hostname, uac_log_path, output_path, tracker_queue))
 
     if not to_process:
         print("[✓] Nothing to process.")
@@ -249,7 +210,6 @@ def main():
     print(f"[DEBUG] Calling update_tracker with tracker_file: {tracker_file}")
     update_tracker(tracker_file, tracker_queue, total)
     print(f"[DEBUG] update_tracker finished for tracker_file: {tracker_file}")
-
 
 if __name__ == "__main__":
     main()
