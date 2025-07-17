@@ -61,21 +61,20 @@ class StatLogParser:
                             btime = match.get("btime")
 
                             base_event = {
-                                "target": {
+                                "principal": {
+                                    "process": {
+                                        "command_line": "stat",
+                                        "file": {
+                                            "stat_inode": match["inode"]
+                                        }
+                                    },
+                                    "host_name": self.hostname,
                                     "file": {
                                         "full_path": path,
-                                        "permissions": match["permissions"],
-                                        "owner": {
-                                            "user_id": match["uid"],
-                                            "group_id": match["gid"]
-                                        },
                                         "size": int(match["size"]),
-                                        "inode": match["inode"],
-                                        "block_count": match["block_count"],
-                                        "accessed_time": self.to_iso(match["atime"]),
-                                        "modified_time": self.to_iso(match["mtime"]),
-                                        "metadata_change_time": self.to_iso(match["ctime"]),
-                                        "created_time": self.to_iso(btime) if btime else None
+                                        "last_modification_time": self.to_iso(match["mtime"]),
+                                        "last_access_time": self.to_iso(match["atime"]),
+                                        "create_time": self.to_iso(btime) if btime else None
                                     }
                                 },
                                 "metadata": {
@@ -84,16 +83,18 @@ class StatLogParser:
                                     "vendor_name": "Juniper",
                                     "log_type": "Host"
                                 },
-                                "principal": {
-                                    "process": {
-                                        "command_line": "stat"
-                                    },
-                                    "host_name": self.hostname
-                                },
-                                "intermediary": {"namespace": "UnixArtifactCollector"}
+                                "intermediary": {"namespace": "UnixArtifactCollector"},
+                                "additional": {
+                                    "symlink": symlink_path if symlink_path else None,
+                                    "block_count": match["block_count"],
+                                    "permissions": match["permissions"],
+                                    "uid": match["uid"],
+                                    "gid": match["gid"],
+                                    "metadata_change_time": self.to_iso(match["ctime"])
+                                }
                             }
-                            if symlink_path:
-                                base_event["additional"] = {"symlink": symlink_path}
+                            # Remove None values from 'additional'
+                            base_event["additional"] = {k: v for k, v in base_event["additional"].items() if v is not None}
                             results.append(base_event)
                             success_count += 1
                             matched = True
