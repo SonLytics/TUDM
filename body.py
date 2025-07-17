@@ -36,6 +36,13 @@ class StatLogParser:
         except:
             return None
 
+    @staticmethod
+    def to_seconds(ts):
+        try:
+            return int(ts)
+        except:
+            return None
+
     def process(self):
         try:
             results = []
@@ -72,9 +79,9 @@ class StatLogParser:
                                     "file": {
                                         "full_path": path,
                                         "size": int(match["size"]),
-                                        "last_modification_time": self.to_iso(match["mtime"]),
-                                        "last_access_time": self.to_iso(match["atime"]),
-                                        "create_time": self.to_iso(btime) if btime else None
+                                        "last_modification_time": {"seconds": self.to_seconds(match["mtime"])} if match["mtime"] else None,
+                                        "last_access_time": {"seconds": self.to_seconds(match["atime"])} if match["atime"] else None,
+                                        "create_time": {"seconds": self.to_seconds(btime)} if btime else None
                                     }
                                 },
                                 "metadata": {
