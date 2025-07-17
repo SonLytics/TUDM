@@ -76,13 +76,15 @@ class StatLogParser:
                                         }
                                     },
                                     "hostname": self.hostname,
-                                    "file": {
-                                        "full_path": path,
-                                        "size": int(match["size"]),
-                                        "last_modification_time": {"seconds": self.to_seconds(match["mtime"])} if match["mtime"] else None,
-                                        "last_access_time": {"seconds": self.to_seconds(match["atime"])} if match["atime"] else None,
-                                        "create_time": {"seconds": self.to_seconds(btime)} if btime else None
-                                    }
+                                    "target": {
+                                        "file": {
+                                            "full_path": path,
+                                            "size": int(match["size"]),
+                                            "last_modification_time": {"seconds": self.to_seconds(match["mtime"])} if match["mtime"] else None,
+                                            "last_access_time": {"seconds": self.to_seconds(match["atime"])} if match["atime"] else None,
+                                            "create_time": {"seconds": self.to_seconds(btime)} if btime else None
+                                        }
+                                    },
                                 },
                                 "metadata": {
                                     "event_type": "FILE_READ",
