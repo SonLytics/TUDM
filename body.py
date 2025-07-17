@@ -68,7 +68,7 @@ class StatLogParser:
                                             "stat_inode": match["inode"]
                                         }
                                     },
-                                    "host_name": self.hostname,
+                                    "hostname": self.hostname,
                                     "file": {
                                         "full_path": path,
                                         "size": int(match["size"]),
