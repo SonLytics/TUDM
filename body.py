@@ -32,7 +32,7 @@ class StatLogParser:
     def to_iso(ts):
         try:
             from datetime import timezone
-            return datetime.fromtimestamp(int(ts), timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+            return datetime.fromtimestamp(int(ts), timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         except:
             return None
 
