@@ -88,7 +88,8 @@ class StatLogParser:
                                     "event_type": "FILE_READ",
                                     "product_name": "Linux",
                                     "vendor_name": "Juniper",
-                                    "log_type": "Host"
+                                    "log_type": "Host",
+                                    "event_timestamp": self.to_iso(match["mtime"])
                                 },
                                 "intermediary": {"namespace": "UnixArtifactCollector"},
                                 "additional": {
